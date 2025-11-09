@@ -4,6 +4,10 @@ version = "0.0.3"
 edition = "2021"
 
 [dependencies]
+# Direct libc usage is required for:
+# 1. FFI types (c_char, c_int, etc.) for Chromium C++ integration
+# 2. Terminal control operations (termios, ioctl, poll) - no safe cross-platform alternative exists
+# 3. Low-level system interaction essential for terminal-based browser functionality
 libc = "0.2"
 unicode-width = "0.1.10"
 unicode-segmentation = "1.10.0"

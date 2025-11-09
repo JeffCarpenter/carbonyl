@@ -7,6 +7,10 @@ use std::os::unix::prelude::AsRawFd;
 
 use crate::utils::log;
 
+// This module requires Unix-like operating systems for terminal control operations
+#[cfg(not(unix))]
+compile_error!("Terminal TTY operations require Unix platform");
+
 pub struct Terminal {
     settings: Option<TerminalSettings>,
     alt_screen: bool,
@@ -69,6 +73,9 @@ const SEQUENCES: [(u32, bool); 4] = [(1049, true), (1003, true), (1006, true), (
 
 impl TTY {
     fn stdin() -> TTY {
+        // SAFETY: STDIN_FILENO is a constant (0) representing standard input.
+        // isatty is safe to call with any file descriptor - it returns 1 if the
+        // file descriptor refers to a terminal, 0 otherwise. No memory is modified.
         let isatty = unsafe { libc::isatty(libc::STDIN_FILENO) };
 
         if isatty != 1 {
@@ -144,8 +151,14 @@ impl TerminalSettings {
         let tty = TTY::stdin();
         let mut term = MaybeUninit::uninit();
         let data = unsafe {
+            // SAFETY: tty.as_raw_fd() returns a valid file descriptor (either STDIN_FILENO
+            // or a descriptor from an opened /dev/tty file). tcgetattr writes a termios
+            // struct to the provided pointer. We've allocated space via MaybeUninit.
+            // We check the return value via to_err() before calling assume_init().
             libc::tcgetattr(tty.as_raw_fd(), term.as_mut_ptr()).to_err()?;
 
+            // SAFETY: tcgetattr succeeded (to_err() didn't return Err), so the termios
+            // struct has been properly initialized and can be safely read.
             term.assume_init()
         };
 
@@ -167,6 +180,10 @@ impl TerminalSettings {
         let c_oflag = self.data.c_oflag;
 
         // Set the terminal to raw mode
+        // SAFETY: cfmakeraw modifies the termios struct in place by setting
+        // appropriate flags for raw mode. The struct is valid because it was
+        // initialized via tcgetattr. This function performs bitwise operations
+        // on the struct fields and is safe to call on valid termios structs.
         unsafe { libc::cfmakeraw(&mut self.data) }
 
         // Restore output flags, ensures carriage returns are consistent
@@ -177,6 +194,10 @@ impl TerminalSettings {
     fn apply(&self) -> io::Result<()> {
         let tty = TTY::stdin();
 
+        // SAFETY: tty.as_raw_fd() returns a valid file descriptor. self.data is a
+        // valid termios struct (either from tcgetattr or properly modified via make_raw).
+        // tcsetattr applies the terminal settings. TCSANOW means apply immediately.
+        // This is safe because the struct contains valid terminal configuration.
         unsafe { libc::tcsetattr(tty.as_raw_fd(), libc::TCSANOW, &self.data).to_err() }
     }
 }

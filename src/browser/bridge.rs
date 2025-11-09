@@ -4,6 +4,10 @@ use std::process::{Command, Stdio};
 use std::sync::{mpsc, Mutex};
 use std::{env, io, thread};
 
+// FFI types from libc are required for C interoperability with Chromium's C++ codebase.
+// These types (c_char, c_int, etc.) ensure proper ABI compatibility across platforms.
+// Using libc for FFI types is the standard approach in Rust, as std::os::raw merely
+// re-exports these types from libc on most platforms.
 use libc::{c_char, c_float, c_int, c_uchar, c_uint, c_void, size_t};
 
 use crate::cli::{CommandLine, CommandLineProgram, EnvVar};
