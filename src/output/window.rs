@@ -1,17 +1,16 @@
-use core::mem::MaybeUninit;
 use std::{
-    fs::OpenOptions,
     io::{Read, Write},
-    os::fd::AsRawFd,
     str::FromStr,
     time::{Duration, Instant},
 };
 
+use crossterm::terminal;
+
 use crate::{cli::CommandLine, gfx::Size, utils::log};
 
-// This module requires Unix-like operating systems for terminal control operations
-#[cfg(not(unix))]
-compile_error!("Terminal window operations require Unix platform");
+// Unix-specific imports for advanced terminal querying
+#[cfg(unix)]
+use std::{fs::OpenOptions, os::fd::AsRawFd, mem::MaybeUninit};
 
 /// A terminal window.
 #[derive(Clone, Debug)]
@@ -51,26 +50,15 @@ impl Window {
     }
 
     pub fn update(&mut self) -> &Self {
-        let (mut term, cell) = unsafe {
-            // SAFETY: We're using MaybeUninit to properly handle uninitialized memory.
-            // STDOUT_FILENO is a valid file descriptor constant provided by libc.
-            // The ioctl TIOCGWINSZ operation writes a winsize struct to the pointer,
-            // which is safe because we've allocated space via MaybeUninit.
-            // We only call assume_init() if ioctl returns 0 (success), ensuring
-            // the data has been written before reading it.
-            let mut ptr = MaybeUninit::<libc::winsize>::uninit();
-
-            if libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, ptr.as_mut_ptr()) == 0 {
-                let size = ptr.assume_init();
-
-                (
-                    Size::new(size.ws_col, size.ws_row),
-                    Size::new(size.ws_xpixel, size.ws_ypixel),
-                )
-            } else {
-                (Size::splat(0), Size::splat(0))
-            }
+        // Use crossterm for cross-platform terminal size detection
+        let mut term = match terminal::size() {
+            Ok((cols, rows)) => Size::new(cols, rows),
+            Err(_) => Size::splat(0),
         };
+        
+        // Pixel dimensions aren't available through crossterm on all platforms
+        // Fall back to query_cell_geometry() or defaults
+        let cell = Size::splat(0);
 
         if term.width == 0 || term.height == 0 {
             let cols = match parse_var("COLUMNS").unwrap_or(0) {
@@ -151,6 +139,7 @@ fn parse_var<T: FromStr>(var: &str) -> Option<T> {
     std::env::var(var).ok()?.parse().ok()
 }
 
+#[cfg(unix)]
 fn query_cell_geometry() -> Option<Size<f32>> {
     let mut tty = OpenOptions::new()
         .read(true)
@@ -267,6 +256,12 @@ fn query_cell_geometry() -> Option<Size<f32>> {
     Some(Size::new(width, height))
 }
 
+#[cfg(not(unix))]
+fn query_cell_geometry() -> Option<Size<f32>> {
+    None
+}
+
+#[cfg(unix)]
 fn query_window_pixels() -> Option<Size<f32>> {
     let mut tty = OpenOptions::new()
         .read(true)
@@ -297,4 +292,9 @@ fn query_window_pixels() -> Option<Size<f32>> {
     }
 
     Some(Size::new(width, height))
+}
+
+#[cfg(not(unix))]
+fn query_window_pixels() -> Option<Size<f32>> {
+    None
 }
