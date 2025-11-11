@@ -1,13 +1,16 @@
-use core::mem::MaybeUninit;
 use std::{
-    fs::OpenOptions,
     io::{Read, Write},
-    os::fd::AsRawFd,
     str::FromStr,
     time::{Duration, Instant},
 };
 
+use crossterm::terminal;
+
 use crate::{cli::CommandLine, gfx::Size, utils::log};
+
+// Unix-specific imports for advanced terminal querying
+#[cfg(unix)]
+use std::{fs::OpenOptions, os::fd::AsRawFd, mem::MaybeUninit};
 
 /// A terminal window.
 #[derive(Clone, Debug)]
@@ -47,20 +50,15 @@ impl Window {
     }
 
     pub fn update(&mut self) -> &Self {
-        let (mut term, cell) = unsafe {
-            let mut ptr = MaybeUninit::<libc::winsize>::uninit();
-
-            if libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, ptr.as_mut_ptr()) == 0 {
-                let size = ptr.assume_init();
-
-                (
-                    Size::new(size.ws_col, size.ws_row),
-                    Size::new(size.ws_xpixel, size.ws_ypixel),
-                )
-            } else {
-                (Size::splat(0), Size::splat(0))
-            }
+        // Use crossterm for cross-platform terminal size detection
+        let mut term = match terminal::size() {
+            Ok((cols, rows)) => Size::new(cols, rows),
+            Err(_) => Size::splat(0),
         };
+        
+        // Pixel dimensions aren't available through crossterm on all platforms
+        // Fall back to query_cell_geometry() or defaults
+        let cell = Size::splat(0);
 
         if term.width == 0 || term.height == 0 {
             let cols = match parse_var("COLUMNS").unwrap_or(0) {
@@ -141,6 +139,7 @@ fn parse_var<T: FromStr>(var: &str) -> Option<T> {
     std::env::var(var).ok()?.parse().ok()
 }
 
+#[cfg(unix)]
 fn query_cell_geometry() -> Option<Size<f32>> {
     let mut tty = OpenOptions::new()
         .read(true)
@@ -151,21 +150,33 @@ fn query_cell_geometry() -> Option<Size<f32>> {
     let mut term = MaybeUninit::<libc::termios>::uninit();
 
     unsafe {
+        // SAFETY: fd is a valid file descriptor from the opened TTY file.
+        // tcgetattr writes a termios struct to the provided pointer, which is safe
+        // because we've allocated space via MaybeUninit. We check the return value
+        // before using the data.
         if libc::tcgetattr(fd, term.as_mut_ptr()) != 0 {
             return None;
         }
     }
 
+    // SAFETY: tcgetattr succeeded (returned 0), so the termios struct has been
+    // properly initialized and can be safely read.
     let original = unsafe { term.assume_init() };
     let mut raw = original;
     let c_oflag = raw.c_oflag;
 
     unsafe {
+        // SAFETY: cfmakeraw modifies the termios struct in place. The struct is valid
+        // because we just initialized it from tcgetattr. This function performs bitwise
+        // operations on the struct fields and is safe to call on valid termios structs.
         libc::cfmakeraw(&mut raw);
     }
 
     raw.c_oflag = c_oflag;
 
+    // SAFETY: fd is still a valid file descriptor, and raw is a valid termios struct.
+    // tcsetattr applies the terminal settings. TCSANOW means apply immediately.
+    // This is safe because the struct contains valid terminal configuration.
     if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) } != 0 {
         return None;
     }
@@ -175,6 +186,10 @@ fn query_cell_geometry() -> Option<Size<f32>> {
     impl Drop for Restore {
         fn drop(&mut self) {
             unsafe {
+                // SAFETY: self.0 is the file descriptor saved during construction,
+                // and self.1 is the original termios struct. Both are valid as they
+                // were obtained successfully earlier. We restore the original terminal
+                // settings to ensure cleanup even if the function exits early.
                 libc::tcsetattr(self.0, libc::TCSANOW, &self.1);
             }
         }
@@ -199,6 +214,10 @@ fn query_cell_geometry() -> Option<Size<f32>> {
             revents: 0,
         };
 
+        // SAFETY: poll is called with a valid pollfd struct and proper count (1).
+        // The file descriptor in fds.fd is valid (from the opened TTY).
+        // poll will block for at most timeout milliseconds waiting for input.
+        // This is safe because we're only reading the return value and checking revents.
         let result = unsafe { libc::poll(&mut fds, 1, timeout) };
 
         if result <= 0 {
@@ -237,6 +256,12 @@ fn query_cell_geometry() -> Option<Size<f32>> {
     Some(Size::new(width, height))
 }
 
+#[cfg(not(unix))]
+fn query_cell_geometry() -> Option<Size<f32>> {
+    None
+}
+
+#[cfg(unix)]
 fn query_window_pixels() -> Option<Size<f32>> {
     let mut tty = OpenOptions::new()
         .read(true)
@@ -267,4 +292,9 @@ fn query_window_pixels() -> Option<Size<f32>> {
     }
 
     Some(Size::new(width, height))
+}
+
+#[cfg(not(unix))]
+fn query_window_pixels() -> Option<Size<f32>> {
+    None
 }

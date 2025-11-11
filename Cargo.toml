@@ -4,7 +4,11 @@ version = "0.0.3"
 edition = "2021"
 
 [dependencies]
+# Direct libc usage is required for:
+# 1. FFI types (c_char, c_int, etc.) for Chromium C++ integration
+# Note: crossterm now handles terminal operations, reducing direct libc usage
 libc = "0.2"
+crossterm = "0.28"
 unicode-width = "0.1.10"
 unicode-segmentation = "1.10.0"
 chrono = "0.4.23"

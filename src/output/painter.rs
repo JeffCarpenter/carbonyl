@@ -213,7 +213,7 @@ impl Painter {
             write!(self.buffer, "\x1b[?25h\x1b[?12h")?;
         }
 
-        self.output.write(self.buffer.as_slice())?;
+        self.output.write_all(self.buffer.as_slice())?;
         self.output.flush()?;
         self.buffer.clear();
         self.cursor = None;
